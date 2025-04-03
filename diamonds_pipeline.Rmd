@@ -1,0 +1,255 @@
+---
+title: "diamonds"
+output: html_document
+date: "2025-03-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(recipes)
+library(purrr)
+library(tidyr)
+library(scales)
+library(randomForest)
+library(corrplot)
+data(diamonds)
+```
+
+```{r}
+head(diamonds)
+```
+#check for missing values
+```{r}
+colSums(is.na(diamonds))
+```
+#Visualize distribution of cut (target variable)
+```{r}
+cut_dist <- ggplot(diamonds, aes(x = cut, fill = cut)) + 
+  geom_bar() + 
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) +
+  labs(title = "Distribution of Cuts", x = "Cut Quality", y = "Count")
+print(cut_dist)
+```
+
+#Correlation analysis for numeric variables
+```{r}
+numeric_vars <- diamonds %>%
+  select_if(is.numeric)
+correlation_matrix <- cor(numeric_vars)
+corrplot(correlation_matrix, method = "circle", type = "upper",
+         tl.col = "black", tl.srt = 45, addCoef.col = "black",
+         number.cex = 0.7, title = "Correlation Matrix of Numeric Variables")
+```
+
+#Split into training/test split with stratified sampling
+```{r}
+set.seed(123)
+strat_indices <- createDataPartition(diamonds$cut, p = 0.8, list = FALSE)
+train_data <- diamonds[strat_indices, ]
+test_data <- diamonds[-strat_indices, ]
+```
+
+#Verify stratification worked
+```{r}
+train_prop <- prop.table(table(train_data$cut))
+test_prop <- prop.table(table(test_data$cut))
+prop_comparison <- data.frame(
+  Cut = names(train_prop),
+  Train = as.numeric(train_prop),
+  Test = as.numeric(test_prop)
+)
+print(prop_comparison)
+```
+
+#Use random forest for feature selection
+```{r}
+set.seed(456)
+rf_model <- randomForest(cut ~ ., data = train_data, importance = TRUE)
+importance_scores <- importance(rf_model)
+var_importance <- data.frame(
+  Feature = rownames(importance_scores),
+  Importance = importance_scores[, "MeanDecreaseGini"]
+)
+var_importance <- var_importance %>%
+  arrange(desc(Importance))
+print(var_importance)
+```
+
+#Plot feature importance 
+```{r}
+importance_plot <- ggplot(var_importance, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") + 
+  coord_flip() + 
+  labs(title = "Feature Importance for Predicting Cut", x = "Feature", y = "Importance")
+print(importance_plot)
+```
+
+#Select top 6 features
+```{r}
+top_features <- var_importance$Feature[1:6]
+top_features <- c(top_features, "cut") #add target variable
+
+#subset data to include only those features
+train_data_selected <- train_data[, top_features]
+test_data_selected <- test_data[, top_features]
+```
+
+#Create preprocessing recipe 
+```{r}
+model_recipe <- recipe(cut ~ ., data = train_data_selected) %>%
+  step_string2factor(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+#prep recipe
+prepped_recipe <- prep(model_recipe, training = train_data_selected)
+
+#apply it
+train_processed <- bake(prepped_recipe, new_data = train_data_selected)
+test_processed <- bake(prepped_recipe, new_data = test_data_selected)
+
+```
+
+#cv 
+```{r}
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE, #save class probabilities
+  summaryFunction = defaultSummary
+)
+```
+
+#grid for tuning
+#test odd k values from 1-21
+```{r}
+k_values <- data.frame(k = seq(1, 21, by = 2)) 
+```
+
+#fix factor levels to be valid r variable names (very good has a space)
+```{r}
+train_data_selected$cut <- factor(train_data_selected$cut,
+                                  levels = levels(train_data_selected$cut),
+                                  labels = make.names(levels(train_data_selected$cut)))
+
+test_data_selected$cut <- factor(test_data_selected$cut,
+                                levels = levels(train_data_selected$cut),
+                                labels = levels(train_data_selected$cut))
+```
+
+#train model
+```{r}
+set.seed(789)
+knn_model <- train(
+  x = train_processed %>% select(-cut),
+  y = train_data_selected$cut,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+
+print(knn_model)
+```
+
+#plot results of tuning 
+```{r}
+tuning_plot <- ggplot(knn_model) +
+  labs(title = "KNN Model Accuracy by k Value", x = "Number of Neighbors", y = "Accuracy")
+print(tuning_plot)
+```
+
+#predict on test set with best model
+```{r}
+test_predictions <- predict(knn_model, newdata = test_processed %>% select(-cut))
+```
+
+#create/visualize confusion matrix
+```{r}
+conf_matrix <- confusionMatrix(test_predictions, test_data_selected$cut)
+print(conf_matrix)
+
+cm_data <- as.data.frame(conf_matrix$table)
+confusion_plot <- ggplot(cm_data, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "black") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix", x = "Actual", y = "Predicted")
+print(confusion_plot)
+```
+
+#class specific metrics
+```{r}
+class_metrics <- data.frame(
+  Class = rownames(conf_matrix$byClass),
+  Sensitivity = conf_matrix$byClass[, "Sensitivity"],
+  Specificity = conf_matrix$byClass[, "Specificity"],
+  Precision = conf_matrix$byClass[, "Pos Pred Value"],
+  F1_Score = conf_matrix$byClass[, "F1"]
+)
+print(class_metrics)
+
+class_metrics_long <- class_metrics %>%
+  pivot_longer(cols = -Class, names_to = "Metric", values_to = "Value")
+
+class_perf_plot <- ggplot(class_metrics_long, aes(x = Class, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Performance Metrics by Cut Class", x = "Cut Class", y = "Value") +
+  scale_y_continuous(limits = c(0, 1))
+print(class_perf_plot)
+```
+
+#pred vs actual
+```{r}
+results_df <- data.frame(
+  Actual = test_data_selected$cut,
+  Predicted = test_predictions
+)
+
+accuracy_by_class <- results_df %>%
+  group_by(Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(Actual == Predicted),
+    Accuracy = Correct / Total
+  )
+
+accuracy_plot <- ggplot(accuracy_by_class, aes(x = Actual, y = Accuracy, fill = Actual)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Accuracy, accuracy = 0.1)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "Prediction Accuracy by Cut Class", x = "Cut Class", y = "Accuracy") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+print(accuracy_plot)
+
+
+```
+
+#Overall summary
+```{r}
+cat("\nOverall Model Performance:\n")
+cat("Accuracy:", round(conf_matrix$overall["Accuracy"] * 100, 2), "%\n")
+cat("Kappa:", round(conf_matrix$overall["Kappa"], 4), "\n")
+cat("Best k value:", knn_model$bestTune$k, "\n")
+```
+
+
+
+
+
+
+
+
+
+
