@@ -4,23 +4,47 @@ format: html
 editor: visual
 ---
 
-## Quarto
-
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-
-## Running Code
-
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-
 ```{r}
-1 + 1
+library(tidyverse)
+library(e1071)
+library(caret)
+library(pROC)
+data(diamond)
 ```
 
-You can add options to executable code like this
-
 ```{r}
-#| echo: false
-2 * 2
+diamonds
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+```{r}
+# Convert target variable to a binary classification problem
+iris$Species <- as.factor(ifelse(iris$Species == "setosa", "setosa", "other"))
+
+# Split data into training and testing sets
+set.seed(494)
+trainIndex <- createDataPartition(iris$Species, p = 0.8, list = FALSE)
+trainData <- iris[trainIndex, ]
+testData <- iris[-trainIndex, ]
+
+# Train SVM model
+svm_model <- svm(Species ~ ., data = trainData, kernel = "radial", probability = TRUE)
+
+# Make predictions
+predictions <- predict(svm_model, testData, probability = TRUE)
+probabilities <- attr(predictions, "probabilities")[, "setosa"]
+
+# Evaluate performance
+conf_matrix <- confusionMatrix(predictions, testData$Species)
+print(conf_matrix)
+
+# Compute ROC curve and AUC
+roc_curve <- roc(as.numeric(testData$Species == "setosa"), probabilities)
+auc_value <- auc(roc_curve)
+print(paste("AUC:", auc_value))
+
+# Plot ROC curve
+plot(roc_curve, main = "ROC Curve for SVM Model", col = "blue")
+
+```
+
+# 
