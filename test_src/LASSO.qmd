@@ -1,0 +1,264 @@
+---
+title: "diamonds Lasso"
+format: html
+editor: visual
+---
+
+
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+set.seed(123)
+
+data(diamonds)
+
+
+```
+
+```{r}
+diamonds <- diamonds %>%
+  mutate(color = factor(color, ordered = FALSE))
+diamonds_small <- diamonds %>%
+  slice(1:10000) %>%  
+  mutate(color = factor(color, ordered = FALSE)) %>% 
+  select(-c(x,y,z))
+
+head(diamonds_small)
+
+
+```
+
+
+```{r}
+diamonds_cv10 <- vfold_cv(diamonds, v = 5)
+lasso_spec <- multinom_reg(
+  penalty = tune(),
+  mixture = 1  # 1 = pure LASSO
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+
+```
+
+```{r}
+lasso_rec <- recipe(color ~ ., data = diamonds_small) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+
+
+```
+
+```{r}
+lasso_wf <- workflow() %>%
+  add_recipe(lasso_rec) %>%
+  add_model(lasso_spec)
+
+```
+
+```{r}
+penalty_grid <- grid_regular(
+  penalty(range = c(-4, 1)),  # log10 scale
+  levels = 5
+)
+
+```
+
+```{r}
+tune_output <- tune_grid(
+  lasso_wf,
+  resamples = diamonds_cv10,
+  metrics = metric_set(accuracy, mn_log_loss),
+  grid = penalty_grid,
+  control = control_resamples(save_pred = TRUE)
+)
+
+
+```
+
+```{r}
+autoplot(tune_output) + theme_classic()
+
+```
+
+```{r}
+best_se_penalty <- select_by_one_std_err(
+  tune_output,
+  metric = "accuracy",
+  desc(penalty)
+)
+
+```
+
+```{r}
+final_model <- finalize_workflow(lasso_wf, best_se_penalty) %>%
+  fit(data = diamonds)
+
+final_model %>% tidy()
+
+```
+```{r}
+# Save predictions
+preds <- predict(final_model, new_data = diamonds_small) %>%
+  bind_cols(color = diamonds_small$color)  # manually add the outcome back
+
+preds %>%
+  metrics(truth = color, estimate = .pred_class)
+preds %>%
+  accuracy(truth = color, estimate = .pred_class)
+
+```
+```{r}
+# Load packages
+library(ggplot2)
+library(glmnet)
+library(caret)
+library(dplyr)
+
+# Load the diamonds dataset
+data(diamonds)
+
+# Remove rows with missing values (just in case)
+diamonds <- na.omit(diamonds)
+
+# Define predictors and response
+X <- model.matrix(color ~ . - 1, data = diamonds)  # One-hot encoding of features
+y <- diamonds$color  # Categorical response
+
+# Train/test split (80/20)
+set.seed(123)
+train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+X_train <- X[train_index, ]
+X_test <- X[-train_index, ]
+y_train <- y[train_index]
+y_test <- y[-train_index]
+
+# Convert y_train and y_test to unordered factors
+y_train <- factor(y_train, ordered = FALSE)
+y_test <- factor(y_test, ordered = FALSE)
+
+# Fit multinomial LASSO
+lasso_model <- cv.glmnet(
+  X_train, y_train, 
+  family = "multinomial", 
+  type.measure = "class", 
+  alpha = 1  # LASSO penalty
+)
+
+# Predict on test set
+pred_probs <- predict(lasso_model, X_test, s = "lambda.min", type = "class")
+pred_classes <- as.factor(pred_probs)
+
+# Evaluate accuracy
+accuracy <- mean(pred_classes == y_test)
+cat("LASSO Multinomial Classification Accuracy:", round(accuracy * 100, 2), "%\n")
+
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+set.seed(123)
+
+# Load and modify diamonds dataset
+data(diamonds)
+
+diamonds_binary <- diamonds %>%
+  mutate(
+    color_e = factor(if_else(color == "E", "E", "Not_E"))
+  ) %>%
+  select(-c(x, y, z, color))  
+
+head(diamonds_binary)
+
+```
+
+```{r}
+# 10-fold cross-validation
+diamonds_cv <- vfold_cv(diamonds_binary, v = 10)
+
+# LASSO logistic regression model
+lasso_spec <- logistic_reg(
+  penalty = tune(),
+  mixture = 1  # LASSO
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+```
+
+```{r}
+# Preprocessing recipe
+lasso_rec <- recipe(color_e ~ ., data = diamonds_binary) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+```
+
+```{r}
+# Workflow
+lasso_wf <- workflow() %>%
+  add_recipe(lasso_rec) %>%
+  add_model(lasso_spec)
+
+# Tuning grid
+penalty_grid <- grid_regular(
+  penalty(range = c(-4, 1)), 
+  levels = 5
+)
+
+```
+
+
+```{r}
+# Tune the model
+
+tune_output <- tune_grid(
+  lasso_wf,
+  resamples = diamonds_cv,
+  metrics = metric_set(accuracy, roc_auc, mn_log_loss),
+  grid = penalty_grid,
+  control = control_resamples(save_pred = TRUE)
+)
+
+# Plot tuning results
+autoplot(tune_output) + theme_classic()
+
+```
+```{r}
+# Select best penalty (1-SE rule)
+best_penalty <- select_best(tune_output, metric = "accuracy")
+
+final_model <- finalize_workflow(lasso_wf, best_penalty) %>%
+  fit(data = diamonds_binary)
+
+final_model %>% tidy()
+
+
+
+
+```
+
+```{r}
+# Class predictions (already working)
+class_preds <- predict(final_model, new_data = diamonds_binary)
+
+# Probability predictions
+prob_preds <- predict(final_model, new_data = diamonds_binary, type = "prob")
+
+# Combine both with the original outcome
+preds <- bind_cols(class_preds, prob_preds, color_e = diamonds_binary$color_e)
+
+# Evaluate accuracy
+preds %>% metrics(truth = color_e, estimate = .pred_class)
+
+# AUC (probability for class "E")
+preds %>% roc_auc(truth = color_e, .pred_E)
+
+
+```
+
