@@ -48,3 +48,30 @@ plot(roc_curve, main = "ROC Curve for SVM Model", col = "blue")
 ```
 
 # 
+
+```{r}
+set.seed(123)
+trainIndex <- createDataPartition(diamonds$cut, p = 0.8, list = FALSE)
+train_data <- diamonds[strat_indices, ]
+test_data <- diamonds[-strat_indices, ]
+```
+
+```{r}
+svm_model <- svm(cut ~ ., data = train_data, kernel = "radial", probability = TRUE)
+
+
+```
+
+```{r}
+saveRDS(svm_model, "svm_mod_diamonds.rds")
+```
+
+```{r}
+predictions <- predict(svm_model, test_data, probability = TRUE)
+```
+
+```{r}
+# Evaluate performance
+conf_matrix <- confusionMatrix(predictions, test_data$cut)
+print(conf_matrix)
+```
