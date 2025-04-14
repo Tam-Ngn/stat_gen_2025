@@ -70,7 +70,8 @@ print(prop_comparison)
 #Use random forest for feature selection
 ```{r}
 set.seed(456)
-rf_model <- randomForest(cut ~ ., data = train_data, importance = TRUE)
+# rf_model <- randomForest(cut ~ ., data = train_data, importance = TRUE)
+rf_model <- readRDS("rf_ft_selection.rds")
 importance_scores <- importance(rf_model)
 var_importance <- data.frame(
   Feature = rownames(importance_scores),
@@ -80,6 +81,11 @@ var_importance <- var_importance %>%
   arrange(desc(Importance))
 print(var_importance)
 ```
+
+```{r}
+# saveRDS(rf_model, "rf_ft_selection.rds")
+```
+
 
 #Plot feature importance 
 ```{r}
@@ -147,18 +153,23 @@ test_data_selected$cut <- factor(test_data_selected$cut,
 
 #train model
 ```{r}
-set.seed(789)
-knn_model <- train(
-  x = train_processed %>% select(-cut),
-  y = train_data_selected$cut,
-  method = "knn",
-  trControl = train_control,
-  tuneGrid = k_values,
-  metric = "Accuracy"
-)
-
-print(knn_model)
+# set.seed(789)
+# knn_model <- train(
+#   x = train_processed %>% select(-cut),
+#   y = train_data_selected$cut,
+#   method = "knn",
+#   trControl = train_control,
+#   tuneGrid = k_values,
+#   metric = "Accuracy"
+# )
+# 
+# print(knn_model)
 ```
+
+```{r}
+knn_model <- readRDS("knn_mod_diamonds.rds")
+```
+
 
 #plot results of tuning 
 ```{r}
@@ -247,6 +258,9 @@ cat("Best k value:", knn_model$bestTune$k, "\n")
 
 
 
+```{r}
+# saveRDS(knn_model, "knn_mod_diamonds.rds")
+```
 
 
 

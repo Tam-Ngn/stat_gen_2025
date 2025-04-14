@@ -4,11 +4,13 @@ format: html
 editor: visual
 ---
 
-
-
 ```{r}
 library(tidyverse)
 library(tidymodels)
+library(ggplot2)
+library(glmnet)
+library(caret)
+library(dplyr)
 tidymodels_prefer()
 set.seed(123)
 
@@ -29,7 +31,6 @@ head(diamonds_small)
 
 
 ```
-
 
 ```{r}
 diamonds_cv10 <- vfold_cv(diamonds, v = 5)
@@ -100,6 +101,7 @@ final_model <- finalize_workflow(lasso_wf, best_se_penalty) %>%
 final_model %>% tidy()
 
 ```
+
 ```{r}
 # Save predictions
 preds <- predict(final_model, new_data = diamonds_small) %>%
@@ -111,12 +113,10 @@ preds %>%
   accuracy(truth = color, estimate = .pred_class)
 
 ```
+
 ```{r}
 # Load packages
-library(ggplot2)
-library(glmnet)
-library(caret)
-library(dplyr)
+
 
 # Load the diamonds dataset
 data(diamonds)
@@ -159,9 +159,6 @@ cat("LASSO Multinomial Classification Accuracy:", round(accuracy * 100, 2), "%\n
 ```
 
 ```{r}
-library(tidyverse)
-library(tidymodels)
-tidymodels_prefer()
 set.seed(123)
 
 # Load and modify diamonds dataset
@@ -213,7 +210,6 @@ penalty_grid <- grid_regular(
 
 ```
 
-
 ```{r}
 # Tune the model
 
@@ -229,6 +225,7 @@ tune_output <- tune_grid(
 autoplot(tune_output) + theme_classic()
 
 ```
+
 ```{r}
 # Select best penalty (1-SE rule)
 best_penalty <- select_best(tune_output, metric = "accuracy")
@@ -261,4 +258,3 @@ preds %>% roc_auc(truth = color_e, .pred_E)
 
 
 ```
-
