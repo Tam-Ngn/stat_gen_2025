@@ -1,0 +1,180 @@
+---
+title: "stat_pipeline_v1"
+output: html_document
+date: "2025-04-16"
+---
+
+```{r, message = FALSE}
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(recipes)
+library(purrr)
+library(tidyr)
+library(scales)
+library(randomForest)
+library(corrplot)
+library(glmnet)
+library(FSelectorRcpp)
+```
+
+```{r}
+tumors_df <- read_csv("tumors_df.csv")
+```
+#Training/Test Split
+```{r}
+set.seed(123)
+split_index <- createDataPartition(tumors_df$Class, p = 0.8, list = FALSE)
+train_data <- tumors_df[split_index, ]
+test_data <- tumors_df[-split_index, ]
+```
+
+#Feature Selection
+```{r}
+#remove near-zero variance predictors
+nzv <- nearZeroVar(train_data[, -1], saveMetrics = TRUE)
+filtered_train <- train_data[, c(TRUE, !nzv$nzv)]
+filtered_test <- test_data[, c(TRUE, !nzv$nzv)]
+
+#Select top N features
+set.seed(999)
+info_gain <- information_gain(Class ~., data = filtered_train)
+top_features <- info_gain %>%
+  arrange(desc(importance)) %>%
+  slice_head(n = 100) %>% #take the 100 most informative genes
+  pull(attributes)
+
+train_selected <- filtered_train %>%
+  select(all_of(c("Class", top_features)))
+
+test_selected <- filtered_test %>%
+  select(all_of(c("Class", top_features)))
+
+#clarify that we know this is a classification task
+train_selected$Class <- as.factor(train_selected$Class)
+test_selected$Class <- as.factor(test_selected$Class)
+
+#fix factor level names
+levels(train_selected$Class) <- make.names(levels(train_selected$Class))
+levels(test_selected$Class) <- make.names(levels(test_selected$Class))
+```
+
+#Preprocessing
+```{r}
+model_recipe <- recipe(Class ~., data = train_selected) %>%
+  step_normalize(all_predictors())
+
+prepped_recipe <- prep(model_recipe, training = train_selected)
+train_processed <- bake(prepped_recipe, new_data = train_selected)
+test_processed <- bake(prepped_recipe, new_data = test_selected)
+```
+
+#KNN Tuning
+```{r}
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary
+)
+
+k_values <- data.frame(k = seq(1, 21, by = 2))
+```
+
+#Train model
+```{r, warning = FALSE}
+library(MLmetrics)
+set.seed(789)
+knn_model <- train(
+  x = train_processed %>% select(-Class),
+  y = train_processed$Class,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+print(knn_model)
+```
+
+#Eval on test set
+```{r}
+test_predictions <- predict(knn_model, newdata = test_processed %>% select(-Class))
+conf_matrix <- confusionMatrix(test_predictions, test_processed$Class)
+print(conf_matrix)
+results_df <- data.frame(
+  Actual = test_selected$Class,
+  Predicted = test_predictions
+)
+```
+
+#Confusion Matrix
+```{r}
+cm <- results_df %>%
+  count(Actual, Predicted) %>%
+  ggplot(aes(x = Actual, y = Predicted, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix - KNN", x = "True Label", y = "Predicted Label")
+print(cm)
+
+```
+#Top Features Heatmap
+```{r}
+library(pheatmap)
+
+
+
+```
+
+#Accuracy by Class
+```{r}
+accuracy_by_class <- results_df %>%
+  group_by(Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(as.character(Actual) == as.character(Predicted)),
+    Accuracy = Correct / Total
+  )
+
+ggplot(accuracy_by_class, aes(x = Actual, y = Accuracy, fill = Actual)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Accuracy)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "Accuracy by Tumor Class", y = "Accuracy", x = "Tumor Class") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+
+```
+
+#Error Rate vs K
+```{r}
+tuning_plot <- ggplot(knn_model) +
+  scale_x_continuous(breaks = knn_model$results$k) +
+  labs(title = "KNN Model Accuracy by k Value", x = "Number of Neighbors", y = "Accuracy")
+
+print(tuning_plot)
+
+```
+```{r}
+tuning_plot <- ggplot(knn_model$results, aes(x = k, y = Accuracy)) +
+  geom_line(color = "blue", linewidth = 1.2) +
+  geom_point(color = "blue", size = 2) +
+  scale_x_continuous(breaks = knn_model$results$k) +
+  labs(title = "KNN Model Accuracy by k Value",
+       x = "Number of Neighbors (k)",
+       y = "Accuracy") +
+  theme_minimal()
+
+print(tuning_plot)
+
+```
+
+
+
+
+
+
+
+
