@@ -1,0 +1,78 @@
+---
+title: "svm_gene"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(e1071)
+library(caret)
+library(pROC)
+library(readr)
+data11tumors2 <- read_csv("../data/data11tumors2.csv")
+```
+
+```{r}
+View(data11tumors2)
+```
+
+```{r}
+# Features (X) and Target (y)
+X <- data11tumors2 %>% select(starts_with("D"))
+y <- data11tumors2$Class
+
+
+# Train/Test split (70% train, 30% test)
+set.seed(494)
+train_indices <- sample(1:nrow(data11tumors2), 0.7 * nrow(data11tumors2))
+X_train <- X[train_indices, ]
+y_train <- y[train_indices]
+X_test <- X[-train_indices, ]
+y_test <- y[-train_indices]
+```
+
+```{r}
+# # Perform hyperparameter tuning using tune.svm
+# tune_result <- tune.svm(
+#   x = X_train,
+#   y = as.factor(y_train),
+#   gamma = 2^(-3:3),  # Search range for gamma (RBF kernel)
+#   cost = 2^(-3:3),   # Search range for cost parameter (C)
+#   kernel = "radial",  # Use RBF kernel
+#   tunecontrol = tune.control(cross = 4)  # 5-fold cross-validation
+# )
+# 
+# # Best parameters
+# best_params <- tune_result$best.parameters
+# print(best_params)
+# 
+# # Train the SVM model with the best parameters
+# svm_model_tuned <- svm(
+#   x = X_train, 
+#   y = as.factor(y_train), 
+#   cost = best_params$cost,
+#   gamma = best_params$gamma,
+#   kernel = "radial",
+#   probability = TRUE
+# )
+
+```
+
+```{r}
+# saveRDS(svm_model_tuned, "tuned_svm.rds")
+```
+
+```{r}
+model_untuned <- svm(x = X_train, y = as.factor(y_train), kernel = "radial", cost = 0.1, gamma = 0.125, scale = TRUE)
+```
+
+```{r}
+preds <- predict(model_untuned, X_test)
+
+preds <- as.data.frame(preds)
+```
+
+```{r}
+confusionMatrix(preds$preds, as.factor(y_test))
+```
