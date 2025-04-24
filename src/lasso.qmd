@@ -1,0 +1,279 @@
+---
+title: "Tumors"
+format: html
+editor: visual
+---
+
+
+```{r}
+library(readr)
+library(tidyr)
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+```
+
+```{r}
+tumors<- read_csv("~/Desktop/Classes/STAT Gen/data11tumors2.csv")
+```
+
+
+```{r}
+tumors <- tumors %>%
+  mutate(Class = factor(Class, ordered = FALSE))
+```
+
+
+
+```{r}
+set.seed(123)
+tumor_split <- initial_split(tumors, prop = 0.8, strata = Class)
+tumor_train <- training(tumor_split)
+tumor_test <- testing(tumor_split)
+
+```
+
+```{r}
+library(tidyverse)
+library(rsample)
+
+# Add set labels
+tumor_train$set <- "Train"
+tumor_test$set <- "Test"
+
+# Combine for plotting
+tumor_split_df <- bind_rows(tumor_train, tumor_test)
+
+# Plot counts
+ggplot(tumor_split_df, aes(x = set, fill = Class)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Train-Test Split by Class",
+       x = "Dataset",
+       y = "Count",
+       fill = "Tumor Class") +
+  theme_minimal()
+
+```
+
+
+```{r}
+tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
+
+```
+
+```{r}
+# Add row number as observation ID BEFORE splitting
+tumors <- tumors %>%
+  mutate(obs_id = row_number())
+
+# Then split into training and test
+set.seed(123)
+tumor_split <- initial_split(tumors, prop = 0.8, strata = Class)
+tumor_train <- training(tumor_split)
+tumor_test <- testing(tumor_split)
+
+# Now create folds from tumor_train (which has obs_id!)
+tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
+
+```
+
+
+```{r}
+library(tidymodels)
+library(dplyr)
+library(ggplot2)
+
+# Add observation IDs to the data
+tumor_train <- tumor_train %>%
+  mutate(obs_id = row_number())
+
+# Extract test (assessment) rows from each fold
+fold_vis <- map2_dfr(
+  .x = tumor_folds$splits,
+  .y = tumor_folds$id,
+  .f = ~ {
+    assessment(.x) %>%
+      mutate(fold = .y) %>%
+      select(obs_id, fold)
+  }
+)
+
+
+# ✅ FIX this line:
+plot_df <- expand.grid(
+  obs_id = tumor_train$obs_id,
+  fold = unique(fold_vis$fold)
+) %>%
+  left_join(fold_vis, by = c("obs_id", "fold")) %>%
+  mutate(set = ifelse(is.na(fold), "Train", "Test"))  # ✔️ Correct version
+
+# Plot
+ggplot(fold_vis, aes(x = fold, y = obs_id, fill = fold)) +
+  geom_tile(color = "white") +
+  labs(
+    title = "5-Fold Cross-Validation: Test Observations per Fold",
+    x = "Fold",
+    y = "Observation ID"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")  # optional: remove legend if fold already shown on x-axis
+
+
+```
+
+```{r}
+lasso_spec <- multinom_reg(
+  penalty = tune(),
+  mixture = 1  # pure LASSO
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+```
+
+
+```{r}
+lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%
+  step_normalize(all_numeric_predictors())
+
+```
+
+```{r}
+lasso_wf <- workflow() %>%
+  add_recipe(lasso_rec) %>%
+  add_model(lasso_spec)
+
+```
+
+```{r}
+penalty_grid <- grid_regular(
+  penalty(range = c(-4, 1)),  # 10^-4 to 10^1
+  levels = 10
+)
+
+```
+
+
+
+
+```{r}
+tune_output <- tune_grid(
+  lasso_wf,
+  resamples = tumor_folds,
+  grid = penalty_grid,
+  metrics = metric_set(accuracy, mn_log_loss),
+  control = control_grid(save_pred = TRUE)
+)
+
+```
+
+```{r}
+autoplot(tune_output) +
+  theme_minimal(base_size = 14) +
+  scale_x_log10(labels = scales::label_math(10^.x)) +
+  labs(
+    x = "λ (Regularization Strength)",
+    y = "Performance Metric",
+    title = "LASSO Model Performance Across λ Values"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 14),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+
+```{r}
+best_se_penalty <- select_by_one_std_err(
+  tune_output,
+  metric = "accuracy",
+  desc(penalty)
+)
+
+```
+
+
+```{r}
+tumors$Class <- as.factor(tumors$Class)
+
+# Create model matrix (X) and response (y)
+x <- model.matrix(Class ~ ., data = tumors)[, -1]  # remove intercept
+y <- tumors$Class
+
+# Fit LASSO multinomial model
+lasso_fit <- glmnet(x, y, family = "multinomial", alpha = 1)
+
+# Plot coefficient paths
+plot(lasso_fit, xvar = "lambda", label = TRUE)
+```
+
+
+```{r}
+final_lasso_wf <- finalize_workflow(lasso_wf, best_se_penalty)
+
+final_fit <- final_lasso_wf %>%
+  fit(data = tumor_train)
+
+```
+```{r}
+library(broom)
+
+# Tidy the model coefficients
+final_fit %>%
+  extract_fit_parsnip() %>%
+  tidy() %>%
+  filter(estimate == 0)
+
+```
+
+```{r}
+library(broom)
+
+# Tidy the model coefficients
+final_fit %>%
+  extract_fit_parsnip() %>%
+  tidy() %>%
+  filter(estimate != 0)
+
+```
+
+
+
+```{r}
+conf_mat(preds, truth = Class, estimate = .pred_class) %>%
+  summary()
+
+```
+## Viz
+
+```{r}
+preds <- predict(final_fit, new_data = tumor_test) %>%
+  bind_cols(tumor_test)
+
+preds %>%
+  metrics(truth = Class, estimate = .pred_class)
+
+preds %>%
+  conf_mat(truth = Class, estimate = .pred_class)
+
+```
+
+```{r}
+library(ggplot2)
+
+preds %>%
+  conf_mat(truth = Class, estimate = .pred_class) %>%
+  autoplot(type = "heatmap") +
+  scale_fill_gradient(low = "white", high = "blue") +
+  theme_minimal()
+
+```
+```{r}
+glimpse(roc_long)
+
+```
+
+

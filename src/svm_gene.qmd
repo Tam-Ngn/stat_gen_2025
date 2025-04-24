@@ -76,3 +76,8 @@ preds <- as.data.frame(preds)
 ```{r}
 confusionMatrix(preds$preds, as.factor(y_test))
 ```
+
+```{r}
+saveRDS(model, "")
+loadRDS("")
+```
