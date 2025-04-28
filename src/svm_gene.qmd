@@ -33,14 +33,14 @@ y_test <- y[-train_indices]
 ```
 
 ```{r}
-split_index <- createDataPartition(data11tumors2$Class, p = 0.8, list = FALSE)
-train_data <- tumors_df[split_index, ]
-test_data <- tumors_df[-split_index, ]
+# split_index <- createDataPartition(data11tumors2$Class, p = 0.8, list = FALSE)
+# train_data <- data11tumors2[split_index, ]
+# test_data <- data11tumors2[-split_index, ]
 ```
 
 ```{r}
-write_csv(train_data, "../data/train.csv")
-write_csv(test_data, "../data/test.csv")
+# write_csv(train_data, "../data/train.csv")
+# write_csv(test_data, "../data/test.csv")
 
 ```
 
@@ -76,20 +76,19 @@ write_csv(test_data, "../data/test.csv")
 ```
 
 ```{r}
-model_untuned <- svm(x = X_train, y = as.factor(y_train), kernel = "radial", cost = 0.1, gamma = 0.125, scale = TRUE)
+model_untuned <- svm(x = X_train, y = as.factor(y_train), kernel = "linear", cost = 0.1, gamma = 0.125, scale = TRUE)
 ```
 
 ```{r}
 preds <- predict(model_untuned, X_test)
 
-preds <- as.data.frame(preds)
 ```
 
 ```{r}
-confusionMatrix(preds$preds, as.factor(y_test))
+confusionMatrix(preds, as.factor(y_test))
 ```
 
 ```{r}
-saveRDS(model, "")
-loadRDS("")
+saveRDS(model_untuned, "/svm_model.rds")
+# loadRDS("")
 ```
