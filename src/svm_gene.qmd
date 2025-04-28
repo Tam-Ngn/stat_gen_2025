@@ -89,6 +89,6 @@ confusionMatrix(preds, as.factor(y_test))
 ```
 
 ```{r}
-saveRDS(model_untuned, "/svm_model.rds")
+saveRDS(model_untuned, "../models/svm_model.rds")
 # loadRDS("")
 ```
