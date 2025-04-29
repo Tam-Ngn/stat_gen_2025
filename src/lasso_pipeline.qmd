@@ -40,49 +40,32 @@ test_data <- data11tumors2[-split_index, ]
 
 
 ```{r}
-library(tidyverse)
-library(rsample)
-
-# Add set labels
-tumor_train$set <- "Train"
-tumor_test$set <- "Test"
-
-# Combine for plotting
-tumor_split_df <- bind_rows(tumor_train, tumor_test)
-
-# Plot counts
-ggplot(tumor_split_df, aes(x = set, fill = Class)) +
-  geom_bar(position = "dodge") +
-  labs(title = "Train-Test Split by Class",
-       x = "Dataset",
-       y = "Count",
-       fill = "Tumor Class") +
-  theme_minimal()
-
-```
 
 
-```{r}
-tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
-
-```
-
-```{r}
-# Add row number as observation ID BEFORE splitting
-tumors <- tumors %>%
-  mutate(obs_id = row_number())
 
 # Then split into training and test
 set.seed(494)
 set.seed(494)
 library(readr)
-tumors <- read_csv("~/Desktop/stat_gen_2025/data/data11tumors2.csv")
-tumors <- tumors %>%
-  mutate(across(.cols = -Class, .fns = as.numeric))
+tumors <- read_csv("~/Desktop/stat_gen_2025/data/data11tumors2.csv") 
 
 split_index <-createDataPartition(tumors$Class, p = 0.8, list = FALSE)
-train_data <- tumors[split_index, ]
-test_data <- tumors[-split_index, ]
+tumor_train <- read_csv("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/train.csv")
+test_data <- read_csv("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/test.csv")
+# How many rows total
+
+tumor_train <- tumor_train %>%
+  mutate(
+    across(-Class, as.numeric),  # Make everything except Class numeric
+    Class = as.factor(Class)      # Make Class a factor
+  )
+
+test_data <- test_data %>%
+  mutate(
+    across(-Class, as.numeric),  # Make everything except Class numeric
+    Class = as.factor(Class)     # Make Class a factor
+  )
+
 
 # Now create folds from tumor_train (which has obs_id!)
 tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
@@ -96,39 +79,39 @@ library(dplyr)
 library(ggplot2)
 
 # Add observation IDs to the data
-tumor_train <- tumor_train %>%
-  mutate(obs_id = row_number())
+# tumor_train <- tumor_train %>%
+#   mutate(obs_id = row_number())
 
 # Extract test (assessment) rows from each fold
-fold_vis <- map2_dfr(
-  .x = tumor_folds$splits,
-  .y = tumor_folds$id,
-  .f = ~ {
-    assessment(.x) %>%
-      mutate(fold = .y) %>%
-      select(obs_id, fold)
-  }
-)
-
-
-# ✅ FIX this line:
-plot_df <- expand.grid(
-  obs_id = tumor_train$obs_id,
-  fold = unique(fold_vis$fold)
-) %>%
-  left_join(fold_vis, by = c("obs_id", "fold")) %>%
-  mutate(set = ifelse(is.na(fold), "Train", "Test"))  # ✔️ Correct version
-
-# Plot
-ggplot(fold_vis, aes(x = fold, y = obs_id, fill = fold)) +
-  geom_tile(color = "white") +
-  labs(
-    title = "5-Fold Cross-Validation: Test Observations per Fold",
-    x = "Fold",
-    y = "Observation ID"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "none")  # optional: remove legend if fold already shown on x-axis
+# fold_vis <- map2_dfr(
+#   .x = tumor_folds$splits,
+#   .y = tumor_folds$id,
+#   .f = ~ {
+#     assessment(.x) %>%
+#       mutate(fold = .y) %>%
+#       select(obs_id, fold)
+#   }
+# )
+# 
+# 
+# # ✅ FIX this line:
+# plot_df <- expand.grid(
+#   obs_id = tumor_train$obs_id,
+#   fold = unique(fold_vis$fold)
+# ) %>%
+#   left_join(fold_vis, by = c("obs_id", "fold")) %>%
+#   mutate(set = ifelse(is.na(fold), "Train", "Test"))  # ✔️ Correct version
+# 
+# # Plot
+# ggplot(fold_vis, aes(x = fold, y = obs_id, fill = fold)) +
+#   geom_tile(color = "white") +
+#   labs(
+#     title = "5-Fold Cross-Validation: Test Observations per Fold",
+#     x = "Fold",
+#     y = "Observation ID"
+#   ) +
+#   theme_minimal() +
+#   theme(legend.position = "none")  # optional: remove legend if fold already shown on x-axis
 
 
 ```
@@ -145,8 +128,7 @@ lasso_spec <- multinom_reg(
 
 
 ```{r}
-lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%
-  step_rm(set) %>%                 # 🔥 remove 'set' column
+lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%               # 🔥 remove 'set' column
   step_normalize(all_numeric_predictors())
 
 
@@ -211,17 +193,17 @@ best_se_penalty <- select_by_one_std_err(
 
 
 ```{r}
-tumors$Class <- as.factor(tumors$Class)
-
-# Create model matrix (X) and response (y)
-x <- model.matrix(Class ~ ., data = tumors)[, -1]  # remove intercept
-y <- tumors$Class
-
-# Fit LASSO multinomial model
-lasso_fit <- glmnet(x, y, family = "multinomial", alpha = 1)
-
-# Plot coefficient paths
-plot(lasso_fit, xvar = "lambda", label = TRUE)
+# tumors$Class <- as.factor(tumors$Class)
+# 
+# # Create model matrix (X) and response (y)
+# x <- model.matrix(Class ~ ., data = tumors)[, -1]  # remove intercept
+# y <- tumors$Class
+# 
+# # Fit LASSO multinomial model
+# lasso_fit <- glmnet(x, y, family = "multinomial", alpha = 1)
+# 
+# # Plot coefficient paths
+# plot(lasso_fit, xvar = "lambda", label = TRUE)
 ```
 
 
@@ -252,12 +234,13 @@ final_fit %>%
 
 ```{r}
 # Predict on tumor_test
-preds <- predict(final_fit, new_data = tumor_test) %>%
-  bind_cols(tumor_test)
+preds <- predict(final_fit, new_data = test_data) %>%
+  bind_cols(test_data)
 
 # View predictions
 head(preds)
 
+write_csv(preds, "../lassp_preds.csv")
 ```
 
 
