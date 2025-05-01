@@ -16,7 +16,7 @@ library(tidymodels)
 ```{r}
 tumors<- read_csv("~/Desktop/Classes/STAT Gen/data11tumors2.csv")
 ```
-
+### LASSO
 
 ```{r}
 tumors <- tumors %>%
@@ -74,49 +74,6 @@ tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
 
 
 ```{r}
-library(tidymodels)
-library(dplyr)
-library(ggplot2)
-
-# Add observation IDs to the data
-# tumor_train <- tumor_train %>%
-#   mutate(obs_id = row_number())
-
-# Extract test (assessment) rows from each fold
-# fold_vis <- map2_dfr(
-#   .x = tumor_folds$splits,
-#   .y = tumor_folds$id,
-#   .f = ~ {
-#     assessment(.x) %>%
-#       mutate(fold = .y) %>%
-#       select(obs_id, fold)
-#   }
-# )
-# 
-# 
-# # ✅ FIX this line:
-# plot_df <- expand.grid(
-#   obs_id = tumor_train$obs_id,
-#   fold = unique(fold_vis$fold)
-# ) %>%
-#   left_join(fold_vis, by = c("obs_id", "fold")) %>%
-#   mutate(set = ifelse(is.na(fold), "Train", "Test"))  # ✔️ Correct version
-# 
-# # Plot
-# ggplot(fold_vis, aes(x = fold, y = obs_id, fill = fold)) +
-#   geom_tile(color = "white") +
-#   labs(
-#     title = "5-Fold Cross-Validation: Test Observations per Fold",
-#     x = "Fold",
-#     y = "Observation ID"
-#   ) +
-#   theme_minimal() +
-#   theme(legend.position = "none")  # optional: remove legend if fold already shown on x-axis
-
-
-```
-
-```{r}
 lasso_spec <- multinom_reg(
   penalty = tune(),
   mixture = 1  # pure LASSO
@@ -148,8 +105,6 @@ penalty_grid <- grid_regular(
 )
 
 ```
-
-
 
 
 ```{r}
@@ -192,19 +147,6 @@ best_se_penalty <- select_by_one_std_err(
 ```
 
 
-```{r}
-# tumors$Class <- as.factor(tumors$Class)
-# 
-# # Create model matrix (X) and response (y)
-# x <- model.matrix(Class ~ ., data = tumors)[, -1]  # remove intercept
-# y <- tumors$Class
-# 
-# # Fit LASSO multinomial model
-# lasso_fit <- glmnet(x, y, family = "multinomial", alpha = 1)
-# 
-# # Plot coefficient paths
-# plot(lasso_fit, xvar = "lambda", label = TRUE)
-```
 
 
 ```{r}
@@ -216,21 +158,6 @@ final_fit <- final_lasso_wf %>%
 ```
 
 
-```{r}
-saveRDS(final_lasso_wf, "lasso.rds")
-```
-
-
-```{r}
-library(broom)
-
-# Tidy the model coefficients
-final_fit %>%
-  extract_fit_parsnip() %>%
-  tidy() %>%
-  filter(estimate == 0)
-
-```
 
 ```{r}
 # Predict on tumor_test
@@ -240,7 +167,6 @@ preds <- predict(final_fit, new_data = test_data) %>%
 # View predictions
 head(preds)
 
-write_csv(preds, "../lassp_preds.csv")
 ```
 
 
@@ -262,6 +188,48 @@ conf_mat(preds, truth = Class, estimate = .pred_class) %>%
   summary()
 
 ```
+```{r}
+library(dplyr)
+library(yardstick)
+
+# Step 1: Generate predictions from final LASSO model
+# (Assumes your finalized workflow is `final_fit` and test set is `test_data`)
+lasso_preds <- predict(final_fit, new_data = test_data) %>%
+  bind_cols(test_data)
+
+# Step 2: Create a clean dataframe for yardstick
+lasso_preds_df <- lasso_preds %>%
+  select(Class, .pred_class)
+
+# Step 3: Ensure factor levels match
+lasso_preds_df <- lasso_preds_df %>%
+  mutate(
+    Class = factor(Class),
+    .pred_class = factor(.pred_class, levels = levels(Class))
+  )
+
+# Step 4: Compute metrics using yardstick
+lasso_metrics <- metric_set(accuracy, sens, spec)(lasso_preds_df, truth = Class, estimate = .pred_class)
+
+# Step 5: Extract individual metrics
+lasso_accuracy <- lasso_metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+lasso_sens     <- lasso_metrics %>% filter(.metric == "sens")     %>% pull(.estimate)
+lasso_spec     <- lasso_metrics %>% filter(.metric == "spec")     %>% pull(.estimate)
+
+# Step 6: Combine into summary table
+lasso_summary <- tibble(
+  Model = "LASSO",
+  Accuracy = lasso_accuracy,
+  Sensitivity = lasso_sens,
+  Specificity = lasso_spec
+)
+
+# Step 7: View result
+lasso_summary
+
+```
+
+
 ## Viz
 
 ```{r}
@@ -286,88 +254,696 @@ preds %>%
   theme_minimal()
 
 ```
+### SVM
+
+```{r}
+library(tidyverse)
+library(e1071)
+library(caret)
+library(pROC)
+library(readr)
+data11tumors2 <- read_csv("../data/data11tumors2.csv")
+```
 
 
 
 ```{r}
-# Load saved models properly
-knn_model <- readRDS("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/knn_model.rds")
-knn_pca_model <- readRDS("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/knn_pca_model.rds")
-svm_model <- readRDS("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/svm_model.rds")
+# Features (X) and Target (y)
+X <- data11tumors2 %>% select(starts_with("D"))
+y <- data11tumors2$Class
+
+
+# Train/Test split (80% train, 20% test)
+set.seed(494)
+train_indices <- sample(1:nrow(data11tumors2), 0.8 * nrow(data11tumors2))
+X_train <- X[train_indices, ]
+y_train <- y[train_indices]
+X_test <- X[-train_indices, ]
+y_test <- y[-train_indices]
+```
+
+```{r}
+split_index <- createDataPartition(data11tumors2$Class, p = 0.8, list = FALSE)
+train_data <- data11tumors2[split_index, ]
+test_data <- data11tumors2[-split_index, ]
+```
+
+
+
+```{r}
+# Perform hyperparameter tuning using tune.svm
+tune_result <- tune.svm(
+  x = X_train,
+  y = as.factor(y_train),
+  gamma = 2^(-3:3),  # Search range for gamma (RBF kernel)
+  cost = 2^(-3:3),   # Search range for cost parameter (C)
+  kernel = "radial",  # Use RBF kernel
+  tunecontrol = tune.control(cross = 4)  # 5-fold cross-validation
+)
+
+# Best parameters
+best_params <- tune_result$best.parameters
+print(best_params)
+
+# Train the SVM model with the best parameters
+svm_model_tuned <- svm(
+  x = X_train,
+  y = as.factor(y_train),
+  cost = best_params$cost,
+  gamma = best_params$gamma,
+  kernel = "radial",
+  probability = TRUE
+)
 
 ```
 
 
 ```{r}
-# Assume you already loaded these models:
-# knn_model
-# knn_pca_model
-# svm_model
+model_untuned <- svm(x = X_train, y = as.factor(y_train), kernel = "linear", cost = 0.1, gamma = 0.125, scale = TRUE)
+```
 
-library(broom)
+```{r}
+preds_svm <- predict(model_untuned, X_test)
+
+```
+
+```{r}
+library(caret)
+
+# Make sure both preds and y_test are factors
+confusion_matrix <- confusionMatrix(
+  data = factor(preds_svm),
+  reference = factor(y_test)
+)
+
+confusion_matrix
+
+```
+
+```{r}
+library(ggplot2)
+library(yardstick)
+
+# First organize into a dataframe
+svm_preds_df <- tibble(
+  .pred_class = preds_svm,
+  Class = y_test
+)
+
+# Create confusion matrix
+svm_conf_mat <- confusion_matrix <- confusionMatrix(
+  data = factor(preds_svm),
+  reference = factor(y_test)
+)
+
+
+
+# Plot heatmap
+# library(yardstick)
+
+# 1. Fix Class factor levels to match predictions
+svm_preds_df <- svm_preds_df %>%
+  mutate(
+    Class = factor(Class, levels = levels(.pred_class))
+  )
+
+# 2. Define the metrics you want
+classification_metrics <- metric_set(accuracy, sens, spec)
+
+# 3. Compute the metrics
+svm_sens_spec <- svm_preds_df %>%
+  classification_metrics(truth = Class, estimate = .pred_class)
+
+svm_preds_df %>%
+  classification_metrics(truth = Class, estimate = .pred_class)
+
+
+```
+```{r}
 library(dplyr)
 library(yardstick)
+
+# Step 1: Get predictions from your trained SVM model
+# (Assumes you used: model_untuned or svm_model_tuned depending on your setup)
+preds_svm <- predict(model_untuned, X_test)
+
+# Step 2: Create a results dataframe
+svm_preds_df <- tibble(
+  .pred_class = preds_svm,
+  Class = y_test
+)
+
+# Step 3: Ensure factor levels match
+svm_preds_df <- svm_preds_df %>%
+  mutate(
+    Class = factor(Class),
+    .pred_class = factor(.pred_class, levels = levels(Class))
+  )
+
+# Step 4: Compute metrics using yardstick
+svm_metrics <- metric_set(accuracy, sens, spec)(svm_preds_df, truth = Class, estimate = .pred_class)
+
+# Step 5: Extract individual metrics
+svm_accuracy <- svm_metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+svm_sens     <- svm_metrics %>% filter(.metric == "sens")     %>% pull(.estimate)
+svm_spec     <- svm_metrics %>% filter(.metric == "spec")     %>% pull(.estimate)
+
+# Step 6: Combine into a summary table
+svm_summary <- tibble(
+  Model = "SVM",
+  Accuracy = svm_accuracy,
+  Sensitivity = svm_sens,
+  Specificity = svm_spec
+)
+
+# Step 7: View result
+svm_summary
+
+```
+
+### KNN
+
+
+
+```{r, message = FALSE}
 library(ggplot2)
+library(caret)
+library(dplyr)
+library(recipes)
+library(purrr)
+library(tidyr)
+library(scales)
+library(glmnet)
+library(FSelectorRcpp)
 
-# First: Predict on the test set for all models
-knn_preds <- predict(knn_model, new_data = tumor_test, type = "raw") %>%
-  bind_cols(tumor_test)
+
+```
+
+```{r}
+tumors_df <- read_csv("../data/data11tumors2.csv")
+```
+#Training/Test Split
+```{r}
+set.seed(494)
+split_index <- createDataPartition(tumors_df$Class, p = 0.8, list = FALSE)
+train_data <- tumors_df[split_index, ]
+test_data <- tumors_df[-split_index, ]
+```
+
+#Feature Selection
+```{r}
+#remove near-zero variance predictors
+nzv <- nearZeroVar(train_data[, -1], saveMetrics = TRUE)
+filtered_train <- train_data[, c(TRUE, !nzv$nzv)]
+filtered_test <- test_data[, c(TRUE, !nzv$nzv)]
+
+#Select top N features
+set.seed(999)
+info_gain <- information_gain(Class ~., data = filtered_train)
+top_features <- info_gain %>%
+  arrange(desc(importance)) %>%
+  slice_head(n = 100) %>% #take the 100 most informative genes
+  pull(attributes)
+
+train_selected <- filtered_train %>%
+  select(all_of(c("Class", top_features)))
+
+test_selected <- filtered_test %>%
+  select(all_of(c("Class", top_features)))
+
+#clarify that we know this is a classification task
+train_selected$Class <- as.factor(train_selected$Class)
+test_selected$Class <- as.factor(test_selected$Class)
+
+#fix factor level names
+levels(train_selected$Class) <- make.names(levels(train_selected$Class))
+levels(test_selected$Class) <- make.names(levels(test_selected$Class))
+```
+
+#Preprocessing
+```{r}
+model_recipe <- recipe(Class ~., data = train_selected) %>%
+  step_normalize(all_predictors())
+
+prepped_recipe <- prep(model_recipe, training = train_selected)
+train_processed <- bake(prepped_recipe, new_data = train_selected)
+test_processed <- bake(prepped_recipe, new_data = test_selected)
+```
+
+#KNN Tuning
+```{r}
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary
+)
+
+k_values <- data.frame(k = seq(1, 21, by = 2))
+```
+
+#Train model
+```{r, warning = FALSE}
+library(MLmetrics)
+set.seed(494)
+knn_model <- train(
+  x = train_processed %>% select(-Class),
+  y = train_processed$Class,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+print(knn_model)
+```
+
+#Eval on test set
+```{r}
+test_predictions <- predict(knn_model, newdata = test_processed %>% select(-Class))
+conf_matrix <- confusionMatrix(test_predictions, test_processed$Class)
+print(conf_matrix)
+results_df <- data.frame(
+  Actual = test_selected$Class,
+  Predicted = test_predictions
+)
+```
 
 
-knn_pca_preds <- predict(knn_pca_model, new_data = tumor_test) %>%
-  bind_cols(tumor_test)
 
-svm_preds <- predict(svm_model, new_data = tumor_test) %>%
-  bind_cols(tumor_test)
+```{r}
+library(yardstick)
+library(dplyr)
 
-# Now: Metrics for each model
-knn_preds %>%
-  metrics(truth = Class, estimate = .pred_class)
+# 1. Ensure matching factor levels
+results_df2 <- results_df %>%
+  mutate(
+    Actual = factor(Actual),
+    Predicted = factor(Predicted, levels = levels(Actual))
+  )
 
-knn_pca_preds %>%
-  metrics(truth = Class, estimate = .pred_class)
+# 2. Define classification metric set
+classification_metrics <- metric_set(accuracy, sens, spec)
 
-svm_preds %>%
-  metrics(truth = Class, estimate = .pred_class)
+# 3. Compute accuracy, sensitivity, specificity
+knn_metrics <- classification_metrics(results_df2, truth = Actual, estimate = Predicted)
 
-# Now: Confusion matrix summaries for each model
-knn_preds %>%
-  conf_mat(truth = Class, estimate = .pred_class) %>%
-  summary()
+# 4. Extract individual metrics
+knn_accuracy <- knn_metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+knn_sens     <- knn_metrics %>% filter(.metric == "sens")     %>% pull(.estimate)
+knn_spec     <- knn_metrics %>% filter(.metric == "spec")     %>% pull(.estimate)
 
-knn_pca_preds %>%
-  conf_mat(truth = Class, estimate = .pred_class) %>%
-  summary()
+# 5. Create tidy summary
+knn_summary <- tibble(
+  Model = "KNN",
+  Accuracy = knn_accuracy,
+  Sensitivity = knn_sens,
+  Specificity = knn_spec
+)
 
-svm_preds %>%
-  conf_mat(truth = Class, estimate = .pred_class) %>%
-  summary()
+# View summary
+knn_summary
 
-# Now: Confusion matrix heatmaps for each model
 
-# KNN
-knn_preds %>%
-  conf_mat(truth = Class, estimate = .pred_class) %>%
-  autoplot(type = "heatmap") +
-  scale_fill_gradient(low = "white", high = "blue") +
-  ggtitle("KNN Confusion Matrix") +
-  theme_minimal()
 
-# KNN with PCA
-knn_pca_preds %>%
-  conf_mat(truth = Class, estimate = .pred_class) %>%
-  autoplot(type = "heatmap") +
-  scale_fill_gradient(low = "white", high = "blue") +
-  ggtitle("KNN-PCA Confusion Matrix") +
-  theme_minimal()
+```
 
-# SVM
-svm_preds %>%
-  conf_mat(truth = Class, estimate = .pred_class) %>%
-  autoplot(type = "heatmap") +
-  scale_fill_gradient(low = "white", high = "blue") +
-  ggtitle("SVM Confusion Matrix") +
-  theme_minimal()
+```{r}
+knn_sens_spec <- data.frame(
+  Overall_Sensitivity = overall_sensitivity,
+  Overall_Specificity = overall_specificity
+)
+
+```
+
+
+```{r}
+library(dplyr)
+library(yardstick)
+
+# Step 1: Generate predictions from KNN model
+test_predictions <- predict(knn_model, newdata = test_processed %>% select(-Class))
+
+# Step 2: Create a results dataframe
+results_df <- data.frame(
+  Actual = test_selected$Class,
+  Predicted = test_predictions
+)
+
+# Step 3: Ensure factor levels match
+results_df2 <- results_df %>%
+  mutate(
+    Actual = factor(Actual),
+    Predicted = factor(Predicted, levels = levels(Actual))
+  )
+
+# Step 4: Compute metrics using yardstick
+knn_metrics <- metric_set(accuracy, sens, spec)(results_df2, truth = Actual, estimate = Predicted)
+
+# Step 5: Extract individual metrics
+knn_accuracy <- knn_metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+knn_sens     <- knn_metrics %>% filter(.metric == "sens")     %>% pull(.estimate)
+knn_spec     <- knn_metrics %>% filter(.metric == "spec")     %>% pull(.estimate)
+
+# Step 6: Combine into a summary table
+knn_summary <- tibble(
+  Model = "KNN",
+  Accuracy = knn_accuracy,
+  Sensitivity = knn_sens,
+  Specificity = knn_spec
+)
+
+# Step 7: View results
+knn_summary
+
+```
+
+### PCA
+
+
+```{r, message = FALSE}
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(recipes)
+library(purrr)
+library(tidyr)
+library(scales)
+library(glmnet)
+library(FSelectorRcpp)
+```
+
+
+
+#Training/Test Split
+```{r}
+set.seed(687)
+#split_index <- createDataPartition(tumors_df$Class, p = 0.8, list = FALSE)
+#train_data <- tumors_df[split_index, ]
+#test_data <- tumors_df[-split_index, ]
+
+tumors_train <- read_csv("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/train.csv")
+tumors_test <- read_csv("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/test.csv")
+```
+
+#Feature Selection
+```{r}
+#remove near-zero variance predictors
+nzv <- nearZeroVar(train_data[, -1], saveMetrics = TRUE)
+filtered_train <- train_data[, c(TRUE, !nzv$nzv)]
+filtered_test <- test_data[, c(TRUE, !nzv$nzv)]
+
+#Select top N features
+set.seed(999)
+info_gain <- information_gain(Class ~., data = filtered_train)
+top_features <- info_gain %>%
+  arrange(desc(importance)) %>%
+  slice_head(n = 100) %>% #take the 100 most informative genes
+  pull(attributes)
+
+train_selected <- filtered_train %>%
+  select(all_of(c("Class", top_features)))
+
+test_selected <- filtered_test %>%
+  select(all_of(c("Class", top_features)))
+
+#clarify that we know this is a classification task
+train_selected$Class <- as.factor(train_selected$Class)
+test_selected$Class <- as.factor(test_selected$Class)
+
+#fix factor level names
+levels(train_selected$Class) <- make.names(levels(train_selected$Class))
+levels(test_selected$Class) <- make.names(levels(test_selected$Class))
+```
+
+#Preprocessing
+```{r}
+model_recipe <- recipe(Class ~., data = train_selected) %>%
+  step_normalize(all_predictors())
+
+prepped_recipe <- prep(model_recipe, training = train_selected)
+train_processed <- bake(prepped_recipe, new_data = train_selected)
+test_processed <- bake(prepped_recipe, new_data = test_selected)
+```
+
+#KNN Tuning
+```{r}
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary
+)
+
+k_values <- data.frame(k = seq(1, 21, by = 2))
+```
+
+#Train model
+```{r, warning = FALSE}
+library(MLmetrics)
+set.seed(789)
+knn_model <- train(
+  x = train_processed %>% select(-Class),
+  y = train_processed$Class,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+print(knn_model)
+```
+
+#Eval on test set
+```{r}
+test_predictions <- predict(knn_model, newdata = test_processed %>% select(-Class))
+conf_matrix <- confusionMatrix(test_predictions, test_processed$Class)
+print(conf_matrix)
+knn_results_df <- data.frame(
+  Actual = test_selected$Class,
+  Predicted = test_predictions
+)
+```
+
+
+#Accuracy by Class
+```{r}
+accuracy_by_class <- knn_results_df %>%
+  group_by(Actual) %>%
+  dplyr::summarize(
+    Total = n(),
+    Correct = sum(as.character(Actual) == as.character(Predicted)),
+    Accuracy = Correct / Total
+  )
+
+ggplot(accuracy_by_class, aes(x = Actual, y = Accuracy, fill = Actual)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Accuracy)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "Accuracy by Tumor Class", y = "Accuracy", x = "Tumor Class") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+
+```
+
+#Error Rate vs K
+```{r}
+tuning_plot <- ggplot(knn_model) +
+  scale_x_continuous(breaks = knn_model$results$k) +
+  labs(title = "KNN Model Accuracy by k Value", x = "Number of Neighbors", y = "Accuracy")
+
+print(tuning_plot)
+
+```
+
+#PCA Preprocessing
+```{r}
+#retain PCs that explain 95% of the variance
+pca_recipe <- recipe(Class ~ ., data = filtered_train) %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors(), threshold = 0.95)
+
+pca_prep <- prep(pca_recipe, training = filtered_train)
+train_pca <- bake(pca_prep, new_data = filtered_train)
+test_pca <- bake(pca_prep, new_data = filtered_test)
+
+#convert outcome --> factor + fix level names
+train_pca$Class <- as.factor(train_pca$Class)
+test_pca$Class <- as.factor(test_pca$Class)
+levels(train_pca$Class) <- make.names(levels(train_pca$Class))
+levels(test_pca$Class) <- make.names(levels(test_pca$Class))
+
+```
+
+#Train PCA-based model
+```{r, warning = FALSE}
+set.seed(789)
+knn_pca_model <- train(
+  x = train_pca %>% select(-Class),
+  y = train_pca$Class,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+print(knn_pca_model)
+```
+
+#Eval on test set
+```{r}
+pca_predictions <- predict(knn_pca_model, newdata = test_pca %>% select(-Class))
+pca_predictions <- factor(pca_predictions, levels = levels(test_pca$Class))
+pca_conf_matrix <- confusionMatrix(pca_predictions, test_pca$Class)
+print(pca_conf_matrix)
+
+pca_results_df <- data.frame(
+  Actual = test_pca$Class,
+  Predicted = pca_predictions
+)
+```
+
+
+```{r}
+library(dplyr)
+library(yardstick)
+
+# Step 1: Create prediction dataframe
+pca_results_df <- data.frame(
+  Actual = test_pca$Class,
+  Predicted = predict(knn_pca_model, newdata = test_pca %>% select(-Class))
+)
+
+# Step 2: Ensure factor levels match
+pca_results_df <- pca_results_df %>%
+  mutate(
+    Actual = factor(Actual),
+    Predicted = factor(Predicted, levels = levels(Actual))
+  )
+
+# Step 3: Define metric set
+classification_metrics <- metric_set(accuracy, sens, spec)
+
+# Step 4: Compute metrics
+pca_metrics <- classification_metrics(pca_results_df, truth = Actual, estimate = Predicted)
+
+# Step 5: Extract individual metrics
+pca_accuracy <- pca_metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+pca_sens     <- pca_metrics %>% filter(.metric == "sens")     %>% pull(.estimate)
+pca_spec     <- pca_metrics %>% filter(.metric == "spec")     %>% pull(.estimate)
+
+# Step 6: Combine into summary tibble
+pca_summary <- tibble(
+  Model = "KNN (PCA)",
+  Accuracy = pca_accuracy,
+  Sensitivity = pca_sens,
+  Specificity = pca_spec
+)
+
+# Step 7: View result
+pca_summary
+
+```
+
+
+
+#Compare approaches
+```{r}
+
+
+#accuracy by class
+accuracy_df <- combined_results %>%
+  group_by(Model, Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(Actual == Predicted),
+    Accuracy = Correct / Total,
+    .groups = 'drop'
+  )
+
+
+#accuracy comp
+overall_accuracy <- combined_results %>%
+  mutate(Correct = Actual == Predicted) %>%
+  group_by(Model) %>%
+  summarize(Accuracy = mean(Correct))
+
+print(overall_accuracy)
+
+```
+
+
+
+
+
+```{r}
+library(tibble)
+
+all_model_summary <- tribble(
+  ~Model,  ~Accuracy, ~Sensitivity, ~Specificity,
+  "KNN",    0.9333333, 0.8958333,    0.9919165,
+  "SVM",    0.8857143, 0.8750000,    0.9878676,
+  "LASSO",  0.8787879, 0.8939394,    0.9877675
+)
+
+# View it
+all_model_summary
+
+```
+```{r}
+library(tibble)
+library(dplyr)
+
+# Existing model summaries
+all_model_summary <- tribble(
+  ~Model,     ~Accuracy, ~Sensitivity, ~Specificity,
+  "KNN",       0.9333333, 0.8958333,    0.9919165,
+  "SVM",       0.8857143, 0.8750000,    0.9878676,
+  "LASSO",     0.8787879, 0.8939394,    0.9877675
+)
+
+# Add KNN (PCA) row from earlier yardstick output
+pca_summary <- tibble(
+  Model = "KNN (PCA)",
+  Accuracy = pca_accuracy,
+  Sensitivity = pca_sens,
+  Specificity = pca_spec
+)
+
+# Combine all rows
+final_model_summary <- bind_rows(all_model_summary, pca_summary)
+
+# View result
+final_model_summary %>% 
+  select(!Accuracy)
+
+```
+
+```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Create the plot-friendly format (exclude Accuracy)
+plot_df <- final_model_summary %>%
+  select(-Accuracy) %>%
+  pivot_longer(cols = c(Sensitivity, Specificity),
+               names_to = "Metric",
+               values_to = "Value")
+
+# Plot
+ggplot(plot_df, aes(x = Model, y = Value, fill = Metric)) +
+  geom_col(position = "dodge", width = 0.7) +
+  labs(
+    title = "Sensitivity and Specificity by Model",
+    x = "Model",
+    y = "Value",
+    fill = NULL
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "top"
+  )
 
 ```
 
