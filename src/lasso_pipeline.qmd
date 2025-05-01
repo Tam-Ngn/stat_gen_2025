@@ -637,10 +637,6 @@ library(FSelectorRcpp)
 
 #Training/Test Split
 ```{r}
-set.seed(687)
-#split_index <- createDataPartition(tumors_df$Class, p = 0.8, list = FALSE)
-#train_data <- tumors_df[split_index, ]
-#test_data <- tumors_df[-split_index, ]
 
 tumors_train <- read_csv("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/train.csv")
 tumors_test <- read_csv("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/test.csv")
@@ -654,7 +650,6 @@ filtered_train <- train_data[, c(TRUE, !nzv$nzv)]
 filtered_test <- test_data[, c(TRUE, !nzv$nzv)]
 
 #Select top N features
-set.seed(999)
 info_gain <- information_gain(Class ~., data = filtered_train)
 top_features <- info_gain %>%
   arrange(desc(importance)) %>%
@@ -843,51 +838,8 @@ pca_summary
 
 ```
 
+### Combine the results
 
-
-#Compare approaches
-```{r}
-
-
-#accuracy by class
-accuracy_df <- combined_results %>%
-  group_by(Model, Actual) %>%
-  summarize(
-    Total = n(),
-    Correct = sum(Actual == Predicted),
-    Accuracy = Correct / Total,
-    .groups = 'drop'
-  )
-
-
-#accuracy comp
-overall_accuracy <- combined_results %>%
-  mutate(Correct = Actual == Predicted) %>%
-  group_by(Model) %>%
-  summarize(Accuracy = mean(Correct))
-
-print(overall_accuracy)
-
-```
-
-
-
-
-
-```{r}
-library(tibble)
-
-all_model_summary <- tribble(
-  ~Model,  ~Accuracy, ~Sensitivity, ~Specificity,
-  "KNN",    0.9333333, 0.8958333,    0.9919165,
-  "SVM",    0.8857143, 0.8750000,    0.9878676,
-  "LASSO",  0.8787879, 0.8939394,    0.9877675
-)
-
-# View it
-all_model_summary
-
-```
 ```{r}
 library(tibble)
 library(dplyr)
