@@ -26,25 +26,8 @@ tumors <- tumors %>%
 
 
 
-```{r}
-set.seed(494)
-library(readr)
-data11tumors2 <- read_csv("~/Desktop/stat_gen_2025/data/data11tumors2.csv")
-
-split_index <-createDataPartition(data11tumors2$Class, p = 0.8, list = FALSE)
-train_data <- data11tumors2[split_index, ]
-test_data <- data11tumors2[-split_index, ]
-```
-
-
-
 
 ```{r}
-
-
-
-# Then split into training and test
-set.seed(494)
 set.seed(494)
 library(readr)
 tumors <- read_csv("~/Desktop/stat_gen_2025/data/data11tumors2.csv") 
@@ -85,7 +68,7 @@ lasso_spec <- multinom_reg(
 
 
 ```{r}
-lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%               # 🔥 remove 'set' column
+lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%               
   step_normalize(all_numeric_predictors())
 
 
@@ -112,7 +95,7 @@ tune_output <- tune_grid(
   lasso_wf,
   resamples = tumor_folds,
   grid = penalty_grid,
-  metrics = metric_set(accuracy, mn_log_loss),
+  metrics = metric_set(accuracy, mn_log_loss,sens, spec),
   control = control_grid(save_pred = TRUE)
 )
 
@@ -133,6 +116,28 @@ autoplot(tune_output) +
     axis.title = element_text(face = "bold"),
     panel.grid.minor = element_blank()
   )
+
+```
+## Check how each lambda does
+
+```{r}
+tune_output %>%
+  collect_metrics() %>%
+  select(penalty, .metric, mean, std_err) %>%
+  arrange(.metric, desc(mean))
+
+```
+
+
+```{r}
+library(tidyr)
+
+metrics_wide <- tune_output %>%
+  collect_metrics() %>%
+  select(penalty, .metric, mean) %>%
+  pivot_wider(names_from = .metric, values_from = mean)
+
+metrics_wide
 
 ```
 
@@ -188,6 +193,8 @@ conf_mat(preds, truth = Class, estimate = .pred_class) %>%
   summary()
 
 ```
+
+
 ```{r}
 library(dplyr)
 library(yardstick)
@@ -232,17 +239,6 @@ lasso_summary
 
 ## Viz
 
-```{r}
-preds <- predict(final_fit, new_data = tumor_test) %>%
-  bind_cols(tumor_test)
-
-preds %>%
-  metrics(truth = Class, estimate = .pred_class)
-
-preds %>%
-  conf_mat(truth = Class, estimate = .pred_class)
-
-```
 
 ```{r}
 library(ggplot2)
@@ -254,6 +250,9 @@ preds %>%
   theme_minimal()
 
 ```
+
+
+
 ### SVM
 
 ```{r}
