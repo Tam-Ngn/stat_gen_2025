@@ -50,12 +50,86 @@ test_data <- test_data %>%
   )
 
 
-# Now create folds from tumor_train (which has obs_id!)
-tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
+```
+
+
+
+
+
+```{r}
+library(tidyverse)
+library(rsample)
+
+# Add set labels
+tumor_train$set <- "Train"
+tumor_test$set <- "Test"
+
+# Combine for plotting
+tumor_split_df <- bind_rows(tumor_train, tumor_test)
+
+# Plot counts
+ggplot(tumor_split_df, aes(x = set, fill = Class)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Train-Test Split by Class",
+       x = "Dataset",
+       y = "Count",
+       fill = "Tumor Class") +
+  theme_minimal()
 
 ```
 
 
+```{r}
+tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
+```
+
+
+```{r}
+library(tidyverse)
+library(rsample)
+
+# Step 1: Add row ID before splitting
+tumor_train_cv_viz<- tumor_train %>%
+  mutate(obs_id = row_number())
+
+# Step 2: Create folds
+set.seed(494)
+tumor_folds_viz <- vfold_cv(tumor_train_cv_viz, v = 5, strata = Class)
+
+# Step 3: Extract indices (safely) from folds
+fold_plot_data_viz <- map2_dfr(tumor_folds_viz$splits, seq_along(tumor_folds_viz$splits), function(split, i) {
+  # Get test indices (row numbers)
+  test_idx <- split$in_id
+  all_idx <- 1:nrow(tumor_train_cv_viz)
+  test_rows <- setdiff(all_idx, test_idx)
+  
+  tibble(
+    Fold = paste0("Fold", i),
+    `Observation ID` = test_rows
+  )
+})
+
+ggplot(fold_plot_data, aes(x = as.numeric(factor(Fold)), y = `Observation ID`, color = Fold)) +
+  geom_segment(aes(xend = as.numeric(factor(Fold)) + 0.4, yend = `Observation ID`)) +
+  scale_x_continuous(
+    breaks = 1:5,
+    labels = paste0("Fold", 1:5)
+  ) +
+  labs(
+    title = "5-Fold Cross-Validation: Test Observations per Fold",
+    x = "Fold",
+    y = "Observation ID"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold")
+  )
+
+```
+
+## Model Specification
 ```{r}
 lasso_spec <- multinom_reg(
   penalty = tune(),
@@ -67,12 +141,15 @@ lasso_spec <- multinom_reg(
 ```
 
 
+## Recipe
 ```{r}
 lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%               
   step_normalize(all_numeric_predictors())
 
 
 ```
+
+## Workflow
 
 ```{r}
 lasso_wf <- workflow() %>%
@@ -81,6 +158,8 @@ lasso_wf <- workflow() %>%
 
 ```
 
+
+## Penalty Terms
 ```{r}
 penalty_grid <- grid_regular(
   penalty(range = c(-4, 1)),  # 10^-4 to 10^1
@@ -95,7 +174,7 @@ tune_output <- tune_grid(
   lasso_wf,
   resamples = tumor_folds,
   grid = penalty_grid,
-  metrics = metric_set(accuracy, mn_log_loss,sens, spec),
+  metrics = metric_set(accuracy,sens, spec),
   control = control_grid(save_pred = TRUE)
 )
 
@@ -141,6 +220,7 @@ metrics_wide
 
 ```
 
+## Choose the best lambda
 
 ```{r}
 best_se_penalty <- select_by_one_std_err(
@@ -151,8 +231,16 @@ best_se_penalty <- select_by_one_std_err(
 
 ```
 
+```{r}
+best_se_penalty_sens <- select_by_one_std_err(
+  tune_output,
+  metric = "sens",
+  desc(penalty)
+)
+```
 
 
+## Fit the predictions to our data
 
 ```{r}
 final_lasso_wf <- finalize_workflow(lasso_wf, best_se_penalty)
@@ -161,8 +249,16 @@ final_fit <- final_lasso_wf %>%
   fit(data = tumor_train)
 
 ```
+```{r}
+final_lasso_wf_sens <- finalize_workflow(lasso_wf, best_se_penalty_sens)
+
+final_fit_sens <- final_lasso_wf %>%
+  fit(data = tumor_train)
+
+```
 
 
+## Make Predictions
 
 ```{r}
 # Predict on tumor_test
@@ -174,12 +270,28 @@ head(preds)
 
 ```
 
+```{r}
+# Predict on tumor_test
+preds_sens <- predict(final_fit_sens, new_data = test_data) %>%
+  bind_cols(test_data)
+
+# View predictions
+head(preds_sens)
+```
+
+
+
 
 ```{r}
 library(broom)
 
 # Tidy the model coefficients
 final_fit %>%
+  extract_fit_parsnip() %>%
+  tidy() %>%
+  filter(estimate != 0)
+
+final_fit_sens %>%
   extract_fit_parsnip() %>%
   tidy() %>%
   filter(estimate != 0)
@@ -199,31 +311,27 @@ conf_mat(preds, truth = Class, estimate = .pred_class) %>%
 library(dplyr)
 library(yardstick)
 
-# Step 1: Generate predictions from final LASSO model
-# (Assumes your finalized workflow is `final_fit` and test set is `test_data`)
-lasso_preds <- predict(final_fit, new_data = test_data) %>%
-  bind_cols(test_data)
 
-# Step 2: Create a clean dataframe for yardstick
-lasso_preds_df <- lasso_preds %>%
+
+
+lasso_preds_df <- preds %>%
   select(Class, .pred_class)
 
-# Step 3: Ensure factor levels match
 lasso_preds_df <- lasso_preds_df %>%
   mutate(
     Class = factor(Class),
     .pred_class = factor(.pred_class, levels = levels(Class))
   )
 
-# Step 4: Compute metrics using yardstick
+# SCompute metrics using yardstick
 lasso_metrics <- metric_set(accuracy, sens, spec)(lasso_preds_df, truth = Class, estimate = .pred_class)
 
-# Step 5: Extract individual metrics
+# Extract individual metrics
 lasso_accuracy <- lasso_metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
 lasso_sens     <- lasso_metrics %>% filter(.metric == "sens")     %>% pull(.estimate)
 lasso_spec     <- lasso_metrics %>% filter(.metric == "spec")     %>% pull(.estimate)
 
-# Step 6: Combine into summary table
+# Combine into summary table
 lasso_summary <- tibble(
   Model = "LASSO",
   Accuracy = lasso_accuracy,
@@ -231,7 +339,7 @@ lasso_summary <- tibble(
   Specificity = lasso_spec
 )
 
-# Step 7: View result
+
 lasso_summary
 
 ```
