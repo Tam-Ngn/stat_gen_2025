@@ -1,0 +1,388 @@
+---
+title: "stat_pipeline_v1"
+output: html_document
+date: "2025-04-16"
+---
+
+```{r, message = FALSE}
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(recipes)
+library(purrr)
+library(tidyr)
+library(scales)
+library(randomForest)
+library(corrplot)
+library(glmnet)
+library(FSelectorRcpp)
+```
+
+```{r}
+tumors_df <- read_csv("tumors_df.csv")
+tumors_train <- read_csv("tumors_train.csv")
+tumors_test <- read_csv("tumors_test.csv")
+```
+
+#Training/Test Split
+```{r}
+set.seed(687)
+#split_index <- createDataPartition(tumors_df$Class, p = 0.8, list = FALSE)
+#train_data <- tumors_df[split_index, ]
+#test_data <- tumors_df[-split_index, ]
+
+train_data <- tumors_train
+test_data <- tumors_test
+```
+
+#Feature Selection
+```{r}
+#remove near-zero variance predictors
+nzv <- nearZeroVar(train_data[, -1], saveMetrics = TRUE)
+filtered_train <- train_data[, c(TRUE, !nzv$nzv)]
+filtered_test <- test_data[, c(TRUE, !nzv$nzv)]
+
+#Select top N features
+set.seed(999)
+info_gain <- information_gain(Class ~., data = filtered_train)
+top_features <- info_gain %>%
+  arrange(desc(importance)) %>%
+  slice_head(n = 100) %>% #take the 100 most informative genes
+  pull(attributes)
+
+train_selected <- filtered_train %>%
+  select(all_of(c("Class", top_features)))
+
+test_selected <- filtered_test %>%
+  select(all_of(c("Class", top_features)))
+
+#clarify that we know this is a classification task
+train_selected$Class <- as.factor(train_selected$Class)
+test_selected$Class <- as.factor(test_selected$Class)
+
+#fix factor level names
+levels(train_selected$Class) <- make.names(levels(train_selected$Class))
+levels(test_selected$Class) <- make.names(levels(test_selected$Class))
+```
+
+#Preprocessing
+```{r}
+model_recipe <- recipe(Class ~., data = train_selected) %>%
+  step_normalize(all_predictors())
+
+prepped_recipe <- prep(model_recipe, training = train_selected)
+train_processed <- bake(prepped_recipe, new_data = train_selected)
+test_processed <- bake(prepped_recipe, new_data = test_selected)
+```
+
+#KNN Tuning
+```{r}
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = multiClassSummary
+)
+
+k_values <- data.frame(k = seq(1, 21, by = 2))
+```
+
+#Train model
+```{r, warning = FALSE}
+library(MLmetrics)
+set.seed(789)
+knn_model <- train(
+  x = train_processed %>% select(-Class),
+  y = train_processed$Class,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+print(knn_model)
+```
+
+#Eval on test set
+```{r}
+test_predictions <- predict(knn_model, newdata = test_processed %>% select(-Class))
+conf_matrix <- confusionMatrix(test_predictions, test_processed$Class)
+print(conf_matrix)
+knn_results_df <- data.frame(
+  Actual = test_selected$Class,
+  Predicted = test_predictions
+)
+```
+
+#Confusion Matrix
+```{r}
+cm <- knn_results_df %>%
+  count(Actual, Predicted) %>%
+  ggplot(aes(x = Actual, y = Predicted, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix - KNN", x = "True Label", y = "Predicted Label")
+print(cm)
+
+```
+
+
+#Accuracy by Class
+```{r}
+accuracy_by_class <- knn_results_df %>%
+  group_by(Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(as.character(Actual) == as.character(Predicted)),
+    Accuracy = Correct / Total
+  )
+
+ggplot(accuracy_by_class, aes(x = Actual, y = Accuracy, fill = Actual)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Accuracy)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "Accuracy by Tumor Class", y = "Accuracy", x = "Tumor Class") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+
+```
+
+#Error Rate vs K
+```{r}
+tuning_plot <- ggplot(knn_model) +
+  scale_x_continuous(breaks = knn_model$results$k) +
+  labs(title = "KNN Model Accuracy by k Value", x = "Number of Neighbors", y = "Accuracy")
+
+print(tuning_plot)
+
+```
+
+#PCA Preprocessing
+```{r}
+#retain PCs that explain 95% of the variance
+pca_recipe <- recipe(Class ~ ., data = filtered_train) %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors(), threshold = 0.95)
+
+pca_prep <- prep(pca_recipe, training = filtered_train)
+train_pca <- bake(pca_prep, new_data = filtered_train)
+test_pca <- bake(pca_prep, new_data = filtered_test)
+
+#convert outcome --> factor + fix level names
+train_pca$Class <- as.factor(train_pca$Class)
+test_pca$Class <- as.factor(test_pca$Class)
+levels(train_pca$Class) <- make.names(levels(train_pca$Class))
+levels(test_pca$Class) <- make.names(levels(test_pca$Class))
+
+```
+
+#Train PCA-based model
+```{r, warning = FALSE}
+set.seed(789)
+knn_pca_model <- train(
+  x = train_pca %>% select(-Class),
+  y = train_pca$Class,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values,
+  metric = "Accuracy"
+)
+print(knn_pca_model)
+```
+
+#Eval on test set
+```{r}
+pca_predictions <- predict(knn_pca_model, newdata = test_pca %>% select(-Class))
+pca_predictions <- factor(pca_predictions, levels = levels(test_pca$Class))
+pca_conf_matrix <- confusionMatrix(pca_predictions, test_pca$Class)
+print(pca_conf_matrix)
+
+pca_results_df <- data.frame(
+  Actual = test_pca$Class,
+  Predicted = pca_predictions
+)
+```
+
+```{r}
+pca_cm <- pca_results_df %>%
+  count(Actual, Predicted) %>%
+  ggplot(aes(x = Actual, y = Predicted, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(low = "white", high = "tomato") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix - PCA + KNN", x = "True Label", y = "Predicted Label")
+print(pca_cm)
+```
+
+```{r}
+pca_accuracy_by_class <- pca_results_df %>%
+  group_by(Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(as.character(Actual) == as.character(Predicted)),
+    Accuracy = Correct / Total
+  )
+
+ggplot(pca_accuracy_by_class, aes(x = Actual, y = Accuracy, fill = Actual)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Accuracy)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "Accuracy by Tumor Class (PCA)", y = "Accuracy", x = "Tumor Class") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+```
+#Comp accuracy by clas
+```{r}
+knn_accuracy_by_class <- knn_results_df %>%
+  group_by(Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(as.character(Actual) == as.character(Predicted)),
+    Accuracy = Correct / Total
+  )
+pca_accuracy_by_class <- pca_results_df %>%
+  group_by(Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(as.character(Actual) == as.character(Predicted)),
+    Accuracy = Correct / Total
+  )
+
+ggplot(pca_accuracy_by_class, aes(x = Actual, y = Accuracy, fill = Actual)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Accuracy)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "Accuracy by Tumor Class (PCA)", y = "Accuracy", x = "Tumor Class") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+```
+
+
+```{r}
+svm_results_df <- read_csv("svm_preds.csv")
+svm_results_df$Actual <- pca_results_df$Actual  # Copy the Actual values
+svm_results_df$Predicted <- paste0("X", svm_results_df$preds) 
+svm_results_df$Model <- "SVM"  # Add Model column
+svm_results_df <- svm_results_df[, c("Actual", "Predicted", "Model")]
+
+```
+
+#Compare approaches
+```{r}
+common_levels <- Reduce(union, list(
+  levels(knn_results_df$Actual), 
+  levels(pca_results_df$Actual), 
+  levels(svm_results_df$Actual)
+))
+
+#knn
+knn_results_df$Actual <- factor(knn_results_df$Actual, levels = common_levels)
+knn_results_df$Predicted <- factor(knn_results_df$Predicted, levels = common_levels)
+
+#pca
+pca_results_df$Actual <- factor(pca_results_df$Actual, levels = common_levels)
+pca_results_df$Predicted <- factor(pca_results_df$Predicted, levels = common_levels)
+
+#svm
+svm_results_df$Actual <- factor(svm_results_df$Actual, levels = common_levels)
+svm_results_df$Predicted <- factor(svm_results_df$Predicted, levels = common_levels)
+
+knn_results_df$Model <- "KNN"
+pca_results_df$Model <- "KNN w/ PCA"
+
+combined_results <- bind_rows(knn_results_df, 
+                              pca_results_df,
+                              svm_results_df)
+
+#confusion matrix
+cm_plot <- combined_results %>%
+  count(Model, Actual, Predicted) %>%
+  ggplot(aes(x = Actual, y = Predicted, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 2.5) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  facet_wrap(~ Model) +
+  theme_minimal(base_size = 10) +
+  labs(
+    title = "Confusion Matrix Comparison: Top Features vs PCA",
+    x = "True Label",
+    y = "Predicted Label"
+  )
+
+print(cm_plot)
+
+#accuracy by class
+accuracy_df <- combined_results %>%
+  group_by(Model, Actual) %>%
+  summarize(
+    Total = n(),
+    Correct = sum(Actual == Predicted),
+    Accuracy = Correct / Total,
+    .groups = 'drop'
+  )
+
+accuracy_plot <- ggplot(accuracy_df, aes(x = Actual, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(
+    title = "Accuracy by Tumor Class",
+    y = "Accuracy",
+    x = "Tumor Class"
+  ) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+
+print(accuracy_plot)
+
+#accuracy comp
+overall_accuracy <- combined_results %>%
+  mutate(Correct = Actual == Predicted) %>%
+  group_by(Model) %>%
+  summarize(Accuracy = mean(Correct))
+
+print(overall_accuracy)
+
+#line plot
+ggplot(accuracy_df, aes(x = Actual, y = Accuracy, color = Model, group = Model)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(
+    title = "Accuracy by Tumor Class and Model",
+    y = "Accuracy",
+    x = "Tumor Class"
+  ) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+
+#transparent bar
+ggplot(accuracy_df, aes(x = Actual, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), alpha = 0.8) +
+  theme_minimal() +
+  labs(
+    title = "Accuracy by Tumor Class",
+    y = "Accuracy",
+    x = "Tumor Class"
+  ) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+```
+
+#Save trained models
+```{r}
+saveRDS(knn_model, file = "knn_model.rds")
+saveRDS(knn_pca_model, file = "knn_pca_model.rds")
+```
+
+#load trained models
+```{r}
+knn_model <- readRDS("knn_model.rds")
+knn_pca_model <- readRDS("knn_pca_model.rds")
+
+```
+
+#Overall Model Comparison
+```{r}
+svm_preds <- read_csv("svm_preds.csv")
+
+```
+
+
+
