@@ -14,7 +14,8 @@ data11tumors2 <- read_csv("../data/data11tumors2.csv")
 ```
 
 ```{r}
-View(data11tumors2)
+data11tumors2 %>% 
+  distinct(Class)
 ```
 
 ```{r}
@@ -89,6 +90,21 @@ confusionMatrix(preds, as.factor(y_test))
 ```
 
 ```{r}
-saveRDS(model_untuned, "../models/svm_model.rds")
-# loadRDS("")
+svm_res <- read_csv("../data/svm_preds.csv")
+knn_res <- read_csv("../data/knn_preds.csv") %>% mutate(preds = as.numeric(str_extract(Predicted, "\\d+"))) %>% select(preds)
+knn_pca_res <- read_csv("../data/knn_pca_preds.csv")  %>% mutate(preds = as.numeric(str_extract(Predicted, "\\d+"))) %>% select(preds)
+lasso_res <- read_csv("../data/lasso_preds.csv") %>% rename(preds= "preds %>% pull(.pred_class)")
+```
+
+```{r}
+confusionMatrix(svm_res), as.factor(y_test))
+```
+
+```{r}
+accuracy <- mean(svm_res == y_test)
+print(accuracy)
+```
+
+```{r}
+
 ```

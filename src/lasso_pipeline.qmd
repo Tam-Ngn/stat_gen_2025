@@ -4,7 +4,6 @@ format: html
 editor: visual
 ---
 
-
 ```{r}
 library(readr)
 library(tidyr)
@@ -17,14 +16,10 @@ library(tidymodels)
 tumors<- read_csv("~/Desktop/Classes/STAT Gen/data11tumors2.csv")
 ```
 
-
 ```{r}
 tumors <- tumors %>%
   mutate(Class = factor(Class, ordered = FALSE))
 ```
-
-
-
 
 ```{r}
 set.seed(494)
@@ -35,9 +30,6 @@ split_index <-createDataPartition(data11tumors2$Class, p = 0.8, list = FALSE)
 train_data <- data11tumors2[split_index, ]
 test_data <- data11tumors2[-split_index, ]
 ```
-
-
-
 
 ```{r}
 
@@ -71,7 +63,6 @@ test_data <- test_data %>%
 tumor_folds <- vfold_cv(tumor_train, v = 5, strata = Class)
 
 ```
-
 
 ```{r}
 library(tidymodels)
@@ -126,7 +117,6 @@ lasso_spec <- multinom_reg(
 
 ```
 
-
 ```{r}
 lasso_rec <- recipe(Class ~ ., data = tumor_train) %>%               # 🔥 remove 'set' column
   step_normalize(all_numeric_predictors())
@@ -148,9 +138,6 @@ penalty_grid <- grid_regular(
 )
 
 ```
-
-
-
 
 ```{r}
 tune_output <- tune_grid(
@@ -181,7 +168,6 @@ autoplot(tune_output) +
 
 ```
 
-
 ```{r}
 best_se_penalty <- select_by_one_std_err(
   tune_output,
@@ -190,7 +176,6 @@ best_se_penalty <- select_by_one_std_err(
 )
 
 ```
-
 
 ```{r}
 # tumors$Class <- as.factor(tumors$Class)
@@ -206,7 +191,6 @@ best_se_penalty <- select_by_one_std_err(
 # plot(lasso_fit, xvar = "lambda", label = TRUE)
 ```
 
-
 ```{r}
 final_lasso_wf <- finalize_workflow(lasso_wf, best_se_penalty)
 
@@ -215,11 +199,9 @@ final_fit <- final_lasso_wf %>%
 
 ```
 
-
 ```{r}
 saveRDS(final_lasso_wf, "lasso.rds")
 ```
-
 
 ```{r}
 library(broom)
@@ -243,7 +225,6 @@ head(preds)
 write_csv(preds, "../lassp_preds.csv")
 ```
 
-
 ```{r}
 library(broom)
 
@@ -255,13 +236,12 @@ final_fit %>%
 
 ```
 
-
-
 ```{r}
 conf_mat(preds, truth = Class, estimate = .pred_class) %>%
   summary()
 
 ```
+
 ## Viz
 
 ```{r}
@@ -287,8 +267,6 @@ preds %>%
 
 ```
 
-
-
 ```{r}
 # Load saved models properly
 knn_model <- readRDS("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/knn_model.rds")
@@ -296,7 +274,6 @@ knn_pca_model <- readRDS("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentati
 svm_model <- readRDS("/Users/noahshannon/Desktop/Classes/STAT Gen/Presentation/svm_model.rds")
 
 ```
-
 
 ```{r}
 # Assume you already loaded these models:
@@ -370,4 +347,3 @@ svm_preds %>%
   theme_minimal()
 
 ```
-
